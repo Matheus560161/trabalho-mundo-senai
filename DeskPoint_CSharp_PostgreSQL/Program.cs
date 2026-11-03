@@ -6,8 +6,17 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
+var dbConnectionString = builder.Configuration.GetConnectionString("Postgres")
+    ?? Environment.GetEnvironmentVariable("DATABASE_URL")
+    ?? Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+
+if (string.IsNullOrWhiteSpace(dbConnectionString))
+{
+    throw new InvalidOperationException("No PostgreSQL connection string configured. Set ConnectionStrings__Postgres, DATABASE_URL, or POSTGRES_CONNECTION_STRING.");
+}
+
 builder.Services.AddControllersWithViews();
-builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(builder.Configuration.GetConnectionString("Postgres")));
+builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(dbConnectionString));
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme).AddCookie(options => {
     options.LoginPath = "/Admin/Login"; options.AccessDeniedPath = "/Admin/Login";
     options.Cookie.HttpOnly = true; options.Cookie.SameSite = SameSiteMode.Lax;
