@@ -1,26 +1,17 @@
-
-# Etapa 1: Compilação
 FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 WORKDIR /app
 
-# Copia os arquivos do projeto
 COPY . .
 
-# Restaura as dependências
-RUN dotnet restore
+RUN dotnet restore EquipeEmPonto.csproj
+RUN dotnet publish EquipeEmPonto.csproj -c Release -o /app/publish
 
-# Compila e publica a aplicação
-RUN dotnet publish -c Release -o /app/publish
-
-# Etapa 2: Execução
 FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS final
 WORKDIR /app
 
 COPY --from=build /app/publish .
 
-# Porta da aplicação
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 
 ENTRYPOINT ["dotnet", "EquipeEmPonto.dll"]
-
