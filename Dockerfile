@@ -15,4 +15,4 @@ COPY --from=build /app/publish .
 ENV ASPNETCORE_ENVIRONMENT=Production
 EXPOSE 10000
 
-ENTRYPOINT ["sh", "-c", "dotnet /app/EquipeEmPonto.dll --urls http://0.0.0.0:${PORT:-10000}"]
+ENTRYPOINT ["/bin/sh", "-c", "exec dotnet /app/EquipeEmPonto.dll --urls http://0.0.0.0:${PORT:-10000}"]
