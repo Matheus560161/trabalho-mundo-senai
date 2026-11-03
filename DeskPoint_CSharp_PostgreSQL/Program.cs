@@ -45,6 +45,7 @@ using (var scope = app.Services.CreateScope()) {
     }
 }
 app.MapControllerRoute(name: "default", pattern: "{controller=Home}/{action=Index}/{id?}");
+app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 app.MapPost("/api/ponto/rfid", async (HttpRequest request, AppDbContext db, IConfiguration config) => {
     var expectedKey = config["Rfid:ApiKey"]; var providedKey = request.Headers["X-Device-Key"].ToString();
     if (string.IsNullOrWhiteSpace(expectedKey) || !SafeEquals(expectedKey, providedKey)) return Results.Unauthorized();
