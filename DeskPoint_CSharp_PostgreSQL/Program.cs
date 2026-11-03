@@ -4,11 +4,13 @@ using EquipeEmPonto.Data;
 using EquipeEmPonto.Models;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
-var dbConnectionString = builder.Configuration.GetConnectionString("Postgres")
+var dbConnectionString = NormalizePostgresConnectionString(
+    builder.Configuration.GetConnectionString("Postgres")
     ?? Environment.GetEnvironmentVariable("DATABASE_URL")
-    ?? Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+    ?? Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING"));
 
 if (string.IsNullOrWhiteSpace(dbConnectionString))
 {
@@ -50,7 +52,62 @@ app.MapPost("/api/ponto/rfid", async (HttpRequest request, AppDbContext db, ICon
     var punch = new Punch { EmployeeId = employee.Id, PunchedAt = now, Kind = kind }; db.Punches.Add(punch); await db.SaveChangesAsync();
     return Results.Ok(new { employee = employee.Name, kind, at = punch.PunchedAt });
 });
-app.Run();
+
+static string NormalizePostgresConnectionString(string? connectionString)
+{
+    if (string.IsNullOrWhiteSpace(connectionString))
+    {
+        return string.Empty;
+    }
+
+    var value = connectionString.Trim();
+    if (!value.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase)
+        && !value.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
+    {
+        return value;
+    }
+
+    var uri = new Uri(value);
+    var builder = new NpgsqlConnectionStringBuilder
+    {
+        Host = uri.Host,
+        Port = uri.Port > 0 ? uri.Port : 5432,
+        Database = uri.AbsolutePath.Trim('/'),
+        Username = string.Empty,
+        Password = string.Empty,
+        SslMode = SslMode.Require
+    };
+
+    if (!string.IsNullOrWhiteSpace(uri.UserInfo))
+    {
+        var parts = uri.UserInfo.Split(':', 2);
+        builder.Username = parts[0];
+        if (parts.Length > 1) builder.Password = parts[1];
+    }
+
+    if (!string.IsNullOrWhiteSpace(uri.Query))
+    {
+        var query = uri.Query.TrimStart('?');
+        foreach (var parameter in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var pair = parameter.Split('=', 2);
+            if (pair.Length != 2) continue;
+
+            var key = Uri.UnescapeDataString(pair[0]);
+            var val = Uri.UnescapeDataString(pair[1]);
+            if (key.Equals("sslmode", StringComparison.OrdinalIgnoreCase))
+            {
+                if (Enum.TryParse<SslMode>(val, true, out var sslMode))
+                {
+                    builder.SslMode = sslMode;
+                }
+            }
+        }
+    }
+
+    return builder.ConnectionString;
+}
+
 static string HashPassword(string password) { var salt = RandomNumberGenerator.GetBytes(16); var hash = Rfc2898DeriveBytes.Pbkdf2(password, salt, 100_000, HashAlgorithmName.SHA256, 32); return $"{Convert.ToBase64String(salt)}.{Convert.ToBase64String(hash)}"; }
 static bool SafeEquals(string a, string b) { var aa = Encoding.UTF8.GetBytes(a); var bb = Encoding.UTF8.GetBytes(b); return aa.Length == bb.Length && CryptographicOperations.FixedTimeEquals(aa, bb); }
 public record RfidPunchRequest(string CardUid);
