@@ -13,6 +13,7 @@ WORKDIR /app
 COPY --from=build /app/publish .
 
 ENV ASPNETCORE_ENVIRONMENT=Production
+ENV ASPNETCORE_URLS=http://0.0.0.0:${PORT:-10000}
 EXPOSE 10000
 
-ENTRYPOINT ["/bin/sh", "-c", "exec dotnet /app/EquipeEmPonto.dll --urls http://0.0.0.0:${PORT:-10000}"]
+ENTRYPOINT ["dotnet", "EquipeEmPonto.dll"]
