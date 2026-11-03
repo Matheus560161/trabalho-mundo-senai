@@ -7,11 +7,12 @@ using Microsoft.EntityFrameworkCore;
 using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
-var port = Environment.GetEnvironmentVariable("PORT");
-if (!string.IsNullOrWhiteSpace(port))
+var port = Environment.GetEnvironmentVariable("PORT") ?? "10000";
+
+builder.WebHost.ConfigureKestrel(options =>
 {
-    builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
-}
+    options.ListenAnyIP(int.Parse(port));
+});
 
 var dbConnectionString = NormalizePostgresConnectionString(
     builder.Configuration.GetConnectionString("Postgres")
