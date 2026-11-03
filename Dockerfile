@@ -2,7 +2,7 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
-COPY ["EquipeEmPonto.csproj", "./"]
+COPY ["DeskPoint_CSharp_PostgreSQL/EquipeEmPonto.csproj", "./"]
 RUN dotnet restore "EquipeEmPonto.csproj"
 
 COPY . .
