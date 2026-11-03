@@ -2,11 +2,11 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
-COPY ["DeskPoint.csproj", "./"]
-RUN dotnet restore "DeskPoint.csproj"
+COPY ["EquipeEmPonto.csproj", "./"]
+RUN dotnet restore "EquipeEmPonto.csproj"
 
 COPY . .
-RUN dotnet publish "DeskPoint.csproj" -c Release -o /app/publish /p:UseAppHost=false
+RUN dotnet publish "EquipeEmPonto.csproj" -c Release -o /app/publish /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
