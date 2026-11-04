@@ -60,6 +60,7 @@ app.MapPost("/api/ponto/rfid", async (HttpRequest request, AppDbContext db, ICon
     var punch = new Punch { EmployeeId = employee.Id, PunchedAt = now, Kind = kind }; db.Punches.Add(punch); await db.SaveChangesAsync();
     return Results.Ok(new { employee = employee.Name, kind, at = punch.PunchedAt });
 });
+app.Run();
 
 static string NormalizePostgresConnectionString(string? connectionString)
 {
