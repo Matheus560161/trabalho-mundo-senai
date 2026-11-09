@@ -26,40 +26,113 @@ if (string.IsNullOrWhiteSpace(dbConnectionString))
 
 builder.Services.AddControllersWithViews();
 builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(dbConnectionString));
-builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme).AddCookie(options => {
-    options.LoginPath = "/Admin/Login"; options.AccessDeniedPath = "/Admin/Login";
-    options.Cookie.HttpOnly = true; options.Cookie.SameSite = SameSiteMode.Lax;
-    options.ExpireTimeSpan = TimeSpan.FromHours(8); options.SlidingExpiration = true;
+
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme).AddCookie(options =>
+{
+    options.LoginPath = "/Admin/Login";
+    options.AccessDeniedPath = "/Admin/Login";
+    options.Cookie.HttpOnly = true;
+    options.Cookie.SameSite = SameSiteMode.Lax;
+    options.ExpireTimeSpan = TimeSpan.FromHours(8);
+    options.SlidingExpiration = true;
 });
+
 builder.Services.AddAuthorization();
+
 var app = builder.Build();
-if (!app.Environment.IsDevelopment()) { app.UseExceptionHandler("/Home/Error"); app.UseHsts(); }
-app.UseStaticFiles(); app.UseRouting(); app.UseAuthentication(); app.UseAuthorization();
-using (var scope = app.Services.CreateScope()) {
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseExceptionHandler("/Home/Error");
+    app.UseHsts();
+}
+
+app.UseStaticFiles();
+app.UseRouting();
+app.UseAuthentication();
+app.UseAuthorization();
+
+using (var scope = app.Services.CreateScope())
+{
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.EnsureCreatedAsync();
+
     var config = scope.ServiceProvider.GetRequiredService<IConfiguration>();
-    var email = config["Admin:Email"]; var password = config["Admin:Password"];
-    if (!string.IsNullOrWhiteSpace(email) && !string.IsNullOrWhiteSpace(password) && !await db.AdminUsers.AnyAsync()) {
-        db.AdminUsers.Add(new AdminUser { Email = email.Trim().ToLowerInvariant(), PasswordHash = HashPassword(password) }); await db.SaveChangesAsync();
+    var email = config["Admin:Email"];
+    var password = config["Admin:Password"];
+
+    if (!string.IsNullOrWhiteSpace(email) &&
+        !string.IsNullOrWhiteSpace(password) &&
+        !await db.AdminUsers.AnyAsync())
+    {
+        db.AdminUsers.Add(new AdminUser
+        {
+            Email = email.Trim().ToLowerInvariant(),
+            PasswordHash = HashPassword(password)
+        });
+
+        await db.SaveChangesAsync();
     }
 }
-app.MapControllerRoute(name: "default", pattern: "{controller=Home}/{action=Index}/{id?}");
+
+app.MapControllerRoute(
+    name: "default",
+    pattern: "{controller=Home}/{action=Index}/{id?}");
+
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
-app.MapPost("/api/ponto/rfid", async (HttpRequest request, AppDbContext db, IConfiguration config) => {
-    var expectedKey = config["Rfid:ApiKey"]; var providedKey = request.Headers["X-Device-Key"].ToString();
-    if (string.IsNullOrWhiteSpace(expectedKey) || !SafeEquals(expectedKey, providedKey)) return Results.Unauthorized();
+
+app.MapPost("/api/ponto/rfid", async (HttpRequest request, AppDbContext db, IConfiguration config) =>
+{
+    var expectedKey = config["Rfid:ApiKey"];
+    var providedKey = request.Headers["X-Device-Key"].ToString();
+
+    if (string.IsNullOrWhiteSpace(expectedKey) || !SafeEquals(expectedKey, providedKey))
+        return Results.Unauthorized();
+
     var body = await request.ReadFromJsonAsync<RfidPunchRequest>();
-    if (body is null || string.IsNullOrWhiteSpace(body.CardUid)) return Results.BadRequest(new { message = "UID do cartão não informado." });
+
+    if (body is null || string.IsNullOrWhiteSpace(body.CardUid))
+        return Results.BadRequest(new { message = "UID do cartão não informado." });
+
     var uid = body.CardUid.Trim().Replace(" ", "").ToUpperInvariant();
+
     var employee = await db.Employees.FirstOrDefaultAsync(e => e.RfidUid == uid && e.Active);
-    if (employee is null) return Results.NotFound(new { message = "Cartão não cadastrado para um funcionário ativo." });
-    var now = DateTimeOffset.UtcNow; var start = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
-    var last = await db.Punches.Where(p => p.EmployeeId == employee.Id && p.PunchedAt >= start).OrderByDescending(p => p.PunchedAt).FirstOrDefaultAsync();
+
+    if (employee is null)
+        return Results.NotFound(new { message = "Cartão não cadastrado para um funcionário ativo." });
+
+    // Horário de Brasília
+    var fusoBrasilia = TimeZoneInfo.FindSystemTimeZoneById("America/Sao_Paulo");
+    var nowBrasilia = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, fusoBrasilia);
+
+    // Busca o último registro, independentemente do dia
+    var last = await db.Punches
+        .Where(p => p.EmployeeId == employee.Id)
+        .OrderByDescending(p => p.PunchedAt)
+        .FirstOrDefaultAsync();
+
+    // Alterna entre entrada e saída
     var kind = last?.Kind == "entrada" ? "saída" : "entrada";
-    var punch = new Punch { EmployeeId = employee.Id, PunchedAt = now, Kind = kind }; db.Punches.Add(punch); await db.SaveChangesAsync();
-    return Results.Ok(new { employee = employee.Name, kind, at = punch.PunchedAt });
+
+    // Salva no banco em UTC
+    var punch = new Punch
+    {
+        EmployeeId = employee.Id,
+        PunchedAt = DateTimeOffset.UtcNow,
+        Kind = kind
+    };
+
+    db.Punches.Add(punch);
+    await db.SaveChangesAsync();
+
+    return Results.Ok(new
+    {
+        employee = employee.Name,
+        kind,
+        at = nowBrasilia
+    });
 });
+
 app.Run();
 
 static string NormalizePostgresConnectionString(string? connectionString)
@@ -70,6 +143,7 @@ static string NormalizePostgresConnectionString(string? connectionString)
     }
 
     var value = connectionString.Trim();
+
     if (!value.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase)
         && !value.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
     {
@@ -77,6 +151,7 @@ static string NormalizePostgresConnectionString(string? connectionString)
     }
 
     var uri = new Uri(value);
+
     var builder = new NpgsqlConnectionStringBuilder
     {
         Host = uri.Host,
@@ -91,19 +166,25 @@ static string NormalizePostgresConnectionString(string? connectionString)
     {
         var parts = uri.UserInfo.Split(':', 2);
         builder.Username = parts[0];
-        if (parts.Length > 1) builder.Password = parts[1];
+
+        if (parts.Length > 1)
+            builder.Password = parts[1];
     }
 
     if (!string.IsNullOrWhiteSpace(uri.Query))
     {
         var query = uri.Query.TrimStart('?');
+
         foreach (var parameter in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
         {
             var pair = parameter.Split('=', 2);
-            if (pair.Length != 2) continue;
+
+            if (pair.Length != 2)
+                continue;
 
             var key = Uri.UnescapeDataString(pair[0]);
             var val = Uri.UnescapeDataString(pair[1]);
+
             if (key.Equals("sslmode", StringComparison.OrdinalIgnoreCase))
             {
                 if (Enum.TryParse<SslMode>(val, true, out var sslMode))
@@ -117,6 +198,27 @@ static string NormalizePostgresConnectionString(string? connectionString)
     return builder.ConnectionString;
 }
 
-static string HashPassword(string password) { var salt = RandomNumberGenerator.GetBytes(16); var hash = Rfc2898DeriveBytes.Pbkdf2(password, salt, 100_000, HashAlgorithmName.SHA256, 32); return $"{Convert.ToBase64String(salt)}.{Convert.ToBase64String(hash)}"; }
-static bool SafeEquals(string a, string b) { var aa = Encoding.UTF8.GetBytes(a); var bb = Encoding.UTF8.GetBytes(b); return aa.Length == bb.Length && CryptographicOperations.FixedTimeEquals(aa, bb); }
+static string HashPassword(string password)
+{
+    var salt = RandomNumberGenerator.GetBytes(16);
+
+    var hash = Rfc2898DeriveBytes.Pbkdf2(
+        password,
+        salt,
+        100_000,
+        HashAlgorithmName.SHA256,
+        32);
+
+    return $"{Convert.ToBase64String(salt)}.{Convert.ToBase64String(hash)}";
+}
+
+static bool SafeEquals(string a, string b)
+{
+    var aa = Encoding.UTF8.GetBytes(a);
+    var bb = Encoding.UTF8.GetBytes(b);
+
+    return aa.Length == bb.Length &&
+           CryptographicOperations.FixedTimeEquals(aa, bb);
+}
+
 public record RfidPunchRequest(string CardUid);
