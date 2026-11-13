@@ -1,3 +1,5 @@
+
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using EquipeEmPonto.Data;
@@ -81,6 +83,14 @@ app.MapControllerRoute(
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
+// O navegador da página inicial consulta este endpoint.
+app.MapGet("/api/ponto/redirecionamento", () =>
+{
+    var ticket = RfidRedirectStore.TakeNext();
+    return Results.Ok(new { ticket });
+});
+
+// Registro de ponto pelo RFID.
 app.MapPost("/api/ponto/rfid", async (HttpRequest request, AppDbContext db, IConfiguration config) =>
 {
     var expectedKey = config["Rfid:ApiKey"];
@@ -101,20 +111,20 @@ app.MapPost("/api/ponto/rfid", async (HttpRequest request, AppDbContext db, ICon
     if (employee is null)
         return Results.NotFound(new { message = "Cartão não cadastrado para um funcionário ativo." });
 
-    // Horário de Brasília
+    // Horário de Brasília.
     var fusoBrasilia = TimeZoneInfo.FindSystemTimeZoneById("America/Sao_Paulo");
     var nowBrasilia = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, fusoBrasilia);
 
-    // Busca o último registro, independentemente do dia
+    // Busca o último registro, independentemente do dia.
     var last = await db.Punches
         .Where(p => p.EmployeeId == employee.Id)
         .OrderByDescending(p => p.PunchedAt)
         .FirstOrDefaultAsync();
 
-    // Alterna entre entrada e saída
+    // Alterna entre entrada e saída.
     var kind = last?.Kind == "entrada" ? "saída" : "entrada";
 
-    // Salva no banco em UTC
+    // Salva no banco em UTC.
     var punch = new Punch
     {
         EmployeeId = employee.Id,
@@ -125,11 +135,47 @@ app.MapPost("/api/ponto/rfid", async (HttpRequest request, AppDbContext db, ICon
     db.Punches.Add(punch);
     await db.SaveChangesAsync();
 
+    // Cria ticket temporário para o redirecionamento.
+    var redirectTicket = RfidRedirectStore.Create(employee.Id);
+
     return Results.Ok(new
     {
         employee = employee.Name,
         kind,
-        at = nowBrasilia
+        at = nowBrasilia,
+        redirectTicket
+    });
+});
+
+// Login pelo código digitado no keypad.
+app.MapPost("/api/ponto/codigo", async (HttpRequest request, AppDbContext db, IConfiguration config) =>
+{
+    var expectedKey = config["Rfid:ApiKey"];
+    var providedKey = request.Headers["X-Device-Key"].ToString();
+
+    if (string.IsNullOrWhiteSpace(expectedKey) || !SafeEquals(expectedKey, providedKey))
+        return Results.Unauthorized();
+
+    var body = await request.ReadFromJsonAsync<CodigoLoginRequest>();
+
+    if (body is null || string.IsNullOrWhiteSpace(body.Code))
+        return Results.BadRequest(new { message = "Código não informado." });
+
+    var code = body.Code.Trim().ToUpperInvariant();
+
+    var employee = await db.Employees
+        .FirstOrDefaultAsync(e => e.Code == code && e.Active);
+
+    if (employee is null)
+        return Results.NotFound(new { message = "Código não encontrado ou funcionário inativo." });
+
+    // Cria ticket para o navegador abrir a área do funcionário.
+    var ticket = RfidRedirectStore.Create(employee.Id);
+
+    return Results.Ok(new
+    {
+        employee = employee.Name,
+        ticket
     });
 });
 
@@ -165,10 +211,10 @@ static string NormalizePostgresConnectionString(string? connectionString)
     if (!string.IsNullOrWhiteSpace(uri.UserInfo))
     {
         var parts = uri.UserInfo.Split(':', 2);
-        builder.Username = parts[0];
+        builder.Username = Uri.UnescapeDataString(parts[0]);
 
         if (parts.Length > 1)
-            builder.Password = parts[1];
+            builder.Password = Uri.UnescapeDataString(parts[1]);
     }
 
     if (!string.IsNullOrWhiteSpace(uri.Query))
@@ -222,3 +268,48 @@ static bool SafeEquals(string a, string b)
 }
 
 public record RfidPunchRequest(string CardUid);
+public record CodigoLoginRequest(string Code);
+
+public static class RfidRedirectStore
+{
+    private static readonly ConcurrentDictionary<string, (int EmployeeId, DateTime CreatedAt)> Tickets = new();
+    private static readonly ConcurrentQueue<string> Queue = new();
+
+    public static string Create(int employeeId)
+    {
+        var ticket = Guid.NewGuid().ToString("N");
+        Tickets[ticket] = (employeeId, DateTime.UtcNow);
+        Queue.Enqueue(ticket);
+        return ticket;
+    }
+
+    public static string? TakeNext()
+    {
+        while (Queue.TryDequeue(out var ticket))
+        {
+            if (Tickets.TryGetValue(ticket, out var data) &&
+                DateTime.UtcNow - data.CreatedAt < TimeSpan.FromMinutes(1))
+            {
+                return ticket;
+            }
+
+            Tickets.TryRemove(ticket, out _);
+        }
+
+        return null;
+    }
+
+    public static bool TryConsume(string ticket, out int employeeId)
+    {
+        employeeId = 0;
+
+        if (!Tickets.TryRemove(ticket, out var data))
+            return false;
+
+        if (DateTime.UtcNow - data.CreatedAt >= TimeSpan.FromMinutes(1))
+            return false;
+
+        employeeId = data.EmployeeId;
+        return true;
+    }
+}
